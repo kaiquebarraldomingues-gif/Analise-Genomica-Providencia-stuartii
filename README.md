@@ -19,7 +19,8 @@ As análises computacionais foram estruturadas com auxílio das seguintes ferram
 * **Anotação Estrutural e Funcional:** Prokka.
 * **Análise de Pangenoma:** Roary.
 * **Inferência Filogenética:** snp-sites e IQ-TREE 2.
-* **Estruturação Populacional:** FastBAPS e iTOL.
+* **Estruturação Populacional:** FastBAPS
+* **Visualização da Árvore:** iTOL.
 * **Triagem de Resistência e Mobiloma:** ABRicate (ResFinder), PlasmidFinder, ISEScan, ICEfinder e Phigaro.
 
 
