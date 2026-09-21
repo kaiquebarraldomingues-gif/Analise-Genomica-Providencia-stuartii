@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# Pipeline: Coleta de Metadados de Genomas no NCBI (NCBI Datasets)
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+set -e
+
+accessions_file="acessos.txt"
+raw_output="metadados_brutos.tsv"
+clean_output="metadados_limpos.tsv"
+final_output="tabela_mestrado_com_data.tsv"
+
+message() {
+  echo -e "$1"
+}
+
+message "[1/4] Gerando lista de acessos únicos a partir dos arquivos .fna..."
+ls *.fna | cut -d'.' -f1,2 | sort -u > "$accessions_file"
+n_acessos=$(wc -l < "$accessions_file" | tr -d ' ')
+message "[-] Total de acessos identificados: $n_acessos"
+
+message "[2/4] Baixando sumário de genomas via NCBI Datasets..."
+./datasets summary genome accession --inputfile "$accessions_file" --as-json-lines | \
+./dataformat tsv genome > "$raw_output"
+
+message "[3/4] Removendo duplicatas de BioSample por accession..."
+awk -F'\t' '!seen[$1]++' "$raw_output" > "$clean_output"
+
+message "[4/4] Filtrando colunas de metadados de interesse..."
+# Colunas:
+# 1  -> Assembly Accession
+# 49 -> Assembly BioSample Accession
+# 60 -> Assembly BioSample Collection date
+# 76 -> Assembly BioSample Geographic location
+# 77 -> Assembly BioSample Host
+# 86 -> Assembly BioSample Isolation source
+cut -f 1,49,60,76,77,86 "$clean_output" > "$final_output"
+
+message "\n--- Resumo da Coleta ---"
+total_linhas=$(wc -l < "$final_output" | tr -d ' ')
+total_genomas=$((total_linhas - 1))
+message "Total de genomas anotados: $total_genomas\n"
+
+head -n 6 "$final_output" | column -s $'\t' -t
+
+message "\n[✓] Tabela final salva com sucesso em: $final_output"
