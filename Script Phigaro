@@ -1,0 +1,81 @@
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Estrutura Populacional com fastbaps & Exportação para iTOL
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(fastbaps)
+})
+
+fasta_input <- "snps.fasta"
+csv_output  <- "clusters_providencia_final.csv"
+itol_output <- "itol_clusters.txt"
+
+if (!file.exists(fasta_input)) {
+  stop(paste0("Erro: Arquivo '", fasta_input, "' não encontrado no diretório atual."))
+}
+
+message("[1/4] Carregando alinhamento esparso de SNPs...")
+msa <- import_fasta_sparse_nt(fasta_input)
+
+message("[2/4] Executando agrupamento hierárquico bayesiano (fast_baps)...")
+h <- fast_baps(msa)
+
+message("[3/4] Determinando a partição ótima (best_baps_partition)...")
+baps_clusters <- best_baps_partition(msa, h)
+
+message("\n--- Resumo dos Clusters Identificados ---")
+print(table(baps_clusters))
+cat("\n")
+
+df_final <- data.frame(
+  isolate = names(baps_clusters),
+  cluster = as.vector(baps_clusters),
+  stringsAsFactors = FALSE
+)
+write.csv(df_final, csv_output, row.names = FALSE, quote = FALSE)
+message(paste0("[✓] Tabela simples salva em: ", csv_output))
+
+# 3. Construção do template nativo para iTOL (DATASET_COLORSTRIP)
+message("[4/4] Gerando arquivo de anotação formatado para iTOL...")
+
+clusters_unicos <- sort(unique(df_final$cluster))
+n_clusters      <- length(clusters_unicos)
+
+paleta_cores <- c(
+  "#e6194B", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+  "#911eb4", "#42d4f4", "#f032e6", "#bfef45", "#fabed4",
+  "#469990", "#dcbeff", "#9a6324", "#fffac8", "#800000"
+)
+
+if (n_clusters > length(paleta_cores)) {
+  paleta_cores <- colorRampPalette(paleta_cores)(n_clusters)
+} else {
+  paleta_cores <- paleta_cores[seq_len(n_clusters)]
+}
+
+mapa_cores <- setNames(paleta_cores, clusters_unicos)
+
+cabecalho_itol <- c(
+  "DATASET_COLORSTRIP",
+  "SEPARATOR COMMA",
+  "DATASET_LABEL,Clusters_BAPS",
+  "COLOR,#ff0000",
+  "STRIP_WIDTH,25",
+  "MARGIN,0",
+  "SHOW_INTERNAL,0",
+  "DATASET_SCALE,0",
+  "LEGEND_TITLE,Clusters_BAPS",
+  paste0("LEGEND_SHAPES,", paste(rep("1", n_clusters), collapse = ",")),
+  paste0("LEGEND_COLORS,", paste(paleta_cores, collapse = ",")),
+  paste0("LEGEND_LABELS,", paste(clusters_unicos, collapse = ",")),
+  "DATA"
+)
+
+linhas_dados <- paste(df_final$isolate, mapa_cores[as.character(df_final$cluster)], df_final$cluster, sep = ",")
+conteudo_completo <- c(cabecalho_itol, linhas_dados)
+
+writeLines(conteudo_completo, con = itol_output)
+message(paste0("[✓] Arquivo iTOL salvo com sucesso em: ", itol_output))
