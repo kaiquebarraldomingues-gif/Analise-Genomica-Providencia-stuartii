@@ -1,0 +1,689 @@
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Frequência dos Principais Determinantes de Resistência Adquirida
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+})
+
+# Configurações de Entrada e Saída
+arquivo_entrada <- "resistance_summary_all.tsv"
+arquivo_saida   <- "01_genes_adquiridos_percent.png"
+genes_intrinsecos <- c("aac(2')-Ia")
+
+if (!file.exists(arquivo_entrada)) {
+  stop(paste0("Erro: Arquivo '", arquivo_entrada, "' não encontrado no diretório atual."))
+}
+
+message("[1/3] Carregando e filtrando determinantes intrínsecos...")
+dados <- read.delim(
+  arquivo_entrada,
+  header = TRUE,
+  sep = "\t",
+  check.names = FALSE,
+  quote = "",
+  row.names = NULL
+)
+
+dados_filtrados <- dados %>%
+  filter(!(product %in% genes_intrinsecos))
+
+total_genomas <- length(unique(dados_filtrados$genome_id))
+
+message("[2/3] Calculando frequências relativas dos 15 principais genes...")
+top_genes <- dados_filtrados %>%
+  group_by(product) %>%
+  summarise(n = n_distinct(genome_id), .groups = "drop") %>%
+  mutate(porcentagem = (n / total_genomas) * 100) %>%
+  top_n(15, porcentagem) %>%
+  arrange(desc(porcentagem))
+
+message("[3/3] Gerando e exportando gráfico...")
+p1 <- ggplot(top_genes, aes(x = reorder(product, porcentagem), y = porcentagem, fill = porcentagem)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(porcentagem, 1), "%")), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 110)) +
+  scale_fill_gradient(low = "#feb24c", high = "#f03b20") +
+  labs(
+    title = "Top 15 Genes de Resistência Adquirida",
+    subtitle = "Determinantes cromossômicos intrínsecos removidos da análise",
+    x = "Gene / Determinante Adquirido",
+    y = "Prevalência nos Genomas (%)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+ggsave(arquivo_saida, plot = p1, width = 9, height = 7, dpi = 300)
+message(paste0("[✓] Imagem gerada com sucesso em: ", arquivo_saida))
+
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Perfil de Resistência Predita por Classe de Antimicrobiano
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+})
+
+arquivo_entrada <- "resistance_summary_all.tsv"
+arquivo_saida   <- "02_resistencia_por_classe_quimica.png"
+genes_intrinsecos <- c("aac(2')-Ia")
+
+if (!file.exists(arquivo_entrada)) {
+  stop(paste0("Erro: Arquivo '", arquivo_entrada, "' não encontrado no diretório atual."))
+}
+
+message("[1/4] Carregando base de determinantes e limpando anotações...")
+dados <- read.delim(arquivo_entrada, header = TRUE, sep = "\t", check.names = FALSE, quote = "", row.names = NULL)
+dados_filtrados <- dados %>% filter(!(product %in% genes_intrinsecos))
+total_genomas <- length(unique(dados_filtrados$genome_id))
+
+mapeamento_classes <- c(
+  "Amoxicillin" = "Penicilinas", "Amoxicillin+Clavulanic_acid" = "Penicilinas",
+  "Ampicillin" = "Penicilinas", "Ampicillin+Clavulanic_acid" = "Penicilinas",
+  "Piperacillin" = "Penicilinas", "Piperacillin+Tazobactam" = "Penicilinas",
+  "Ticarcillin" = "Penicilinas", "Ticarcillin+Clavulanic_acid" = "Penicilinas",
+  "Cefepime" = "Cefalosporinas", "Cefixime" = "Cefalosporinas",
+  "Cofotaxime" = "Cefalosporinas", "Cefotaxime" = "Cefalosporinas",
+  "Cefoxitin" = "Cefalosporinas", "Ceftazidime" = "Cefalosporinas",
+  "Ceftriaxone" = "Cefalosporinas", "Cephalothin" = "Cefalosporinas",
+  "Ertapenem" = "Carbapenêmicos", "Imipenem" = "Carbapenêmicos", "Meropenem" = "Carbapenêmicos",
+  "Aztreonam" = "Monobactâmicos",
+  "Ciprofloxacin" = "Fluoroquinolonas", "Levofloxacin" = "Fluoroquinolonas",
+  "Moxifloxacin" = "Fluoroquinolonas", "Nalidixic_acid" = "Fluoroquinolonas",
+  "Norfloxacin" = "Fluoroquinolonas", "Ofloxacin" = "Fluoroquinolonas",
+  "Amikacin" = "Aminoglicosídeos", "Gentamicin" = "Aminoglicosídeos",
+  "Kanamycin" = "Aminoglicosídeos", "Netilmicin" = "Aminoglicosídeos",
+  "Tobramycin" = "Aminoglicosídeos", "Streptomycin" = "Aminoglicosídeos",
+  "spectinomycin" = "Aminoglicosídeos", "paromomycin" = "Aminoglicosídeos",
+  "neomycin" = "Aminoglicosídeos", "ribostamycin" = "Aminoglicosídeos",
+  "aminoglycoside antibiotic" = "Aminoglicosídeos",
+  "Tetracycline" = "Tetraciclinas", "Doxycycline" = "Tetraciclinas", "Minocycline" = "Tetraciclinas",
+  "Erythromycin" = "Macrolídeos", "Azithromycin" = "Macrolídeos", "Clarithromycin" = "Macrolídeos",
+  "Telithromycin" = "Macrolídeos", "Spiramycin" = "Macrolídeos",
+  "Lincomycin" = "Lincosamidas", "Clindamycin" = "Lincosamidas",
+  "Pristinamycin_IA" = "Estreptograminas", "Quinupristin" = "Estreptograminas", "Virginiamycin_S" = "Estreptograminas",
+  "Chloramphenicol" = "Fenicóis", "Florfenicol" = "Fenicóis",
+  "Sulfamethoxazole" = "Sulfonamidas", "Trimethoprim" = "Trimetoprima",
+  "Sulfamethoxazole+Trimethoprim" = "Sulfonamidas;Trimetoprima",
+  "Fosfomycin" = "Fosfomicinas", "Colistin" = "Polimixinas",
+  "Nitrofurantoin" = "Nitrofuranos", "Rifampin" = "Rifamicinas"
+)
+
+message("[2/4] Desmembrando classes múltiplas e mapeando perfis...")
+res_classe <- dados_filtrados %>%
+  separate_rows(resistance, sep = ";") %>%
+  mutate(resistance = trimws(gsub('"', '', resistance))) %>%
+  filter(resistance != "") %>%
+  mutate(classe = ifelse(resistance %in% names(mapeamento_classes), mapeamento_classes[resistance], resistance)) %>%
+  separate_rows(classe, sep = ";") %>%
+  group_by(classe) %>%
+  summarise(n = n_distinct(genome_id), .groups = "drop") %>%
+  mutate(porcentagem = (n / total_genomas) * 100) %>%
+  arrange(desc(porcentagem))
+
+message("[3/4] Construindo gráfico...")
+p2 <- ggplot(res_classe, aes(x = reorder(classe, porcentagem), y = porcentagem, fill = porcentagem)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(round(porcentagem, 1), "%")), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 110)) +
+  scale_fill_gradient(low = "#74a9cf", high = "#0570b0") +
+  labs(
+    title = "Perfil de Resistência Predita por Classe de Antimicrobiano",
+    subtitle = paste("Frequência baseada em", total_genomas, "genomas (Genes intrínsecos removidos)"),
+    x = "Classe de Antimicrobiano",
+    y = "Prevalência nos Genomas (%)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none", panel.grid.minor = element_blank())
+
+message("[4/4] Exportando gráfico...")
+ggsave(arquivo_saida, plot = p2, width = 9, height = 7, dpi = 300)
+message(paste0("[✓] Imagem salva com sucesso em: ", arquivo_saida))
+
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Distribuição da Carga Genética de Resistência por Genoma
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+})
+
+arquivo_entrada <- "resistance_summary_all.tsv"
+arquivo_saida   <- "03_carga_genetica_media_mediana.png"
+
+if (!file.exists(arquivo_entrada)) {
+  stop(paste0("Erro: Arquivo '", arquivo_entrada, "' não encontrado no diretório atual."))
+}
+
+message("[1/3] Carregando determinantes e agrupando por isolado...")
+dados <- read.delim(arquivo_entrada, header = TRUE, sep = "\t", check.names = FALSE, quote = "", row.names = NULL)
+
+carga_genetica <- dados %>%
+  group_by(genome_id) %>%
+  summarise(n_genes = n(), .groups = "drop")
+
+message("[2/3] Calculando parâmetros estatísticos...")
+mediana_genes <- median(carga_genetica$n_genes)
+media_genes   <- mean(carga_genetica$n_genes)
+
+label_mediana <- paste0("Mediana: ", round(mediana_genes, 1))
+label_media   <- paste0("Média: ", round(media_genes, 1))
+
+message("[3/3] Construindo histograma com linhas de tendência central...")
+p3 <- ggplot(carga_genetica, aes(x = n_genes)) +
+  geom_histogram(binwidth = 2, fill = "#542788", color = "white", alpha = 0.8) +
+  geom_vline(aes(xintercept = mediana_genes, color = "Mediana", linetype = "Mediana"), linewidth = 1.2) +
+  geom_vline(aes(xintercept = media_genes, color = "Média", linetype = "Média"), linewidth = 1.2) +
+  scale_color_manual(
+    name = "Estatísticas",
+    values = c("Mediana" = "mediumseagreen", "Média" = "khaki"),
+    labels = c(label_mediana, label_media)
+  ) +
+  scale_linetype_manual(
+    name = "Estatísticas",
+    values = c("Mediana" = "dashed", "Média" = "dotted"),
+    labels = c(label_mediana, label_media)
+  ) +
+  labs(
+    title = "Distribuição da Carga de Resistência por Genoma",
+    subtitle = "Número total de determinantes identificados por isolado",
+    x = "Quantidade de Genes de Resistência",
+    y = "Número de Genomas (Frequência)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "right")
+
+ggsave(arquivo_saida, plot = p3, width = 10, height = 7, dpi = 300)
+message(paste0("[✓] Histograma salvo com sucesso em: ", arquivo_saida))
+message(paste0("    Média = ", round(media_genes, 2), " | Mediana = ", round(mediana_genes, 2)))
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Pipeline: Distribuição de Genomas por Classes Simultâneas de Antimicrobianos
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+import os
+import sys
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+arquivo_entrada = "resistance_summary_all.tsv"
+arquivo_saida   = "distribuicao_classes_porcentagem_fora.png"
+
+if not os.path.isfile(arquivo_entrada):
+    sys.exit(f"Erro: Arquivo '{arquivo_entrada}' não encontrado.")
+
+print("[1/4] Carregando determinantes e aplicando filtros de resistência intrínseca...")
+df = pd.read_csv(arquivo_entrada, sep="\t")
+df_filtered = df[~df["gene"].str.startswith("aac(6')", na=False)]
+
+full_class_mapping = {
+    'Amoxicillin': 'Penicilinas', 'Amoxicillin+Clavulanic_acid': 'Penicilinas',
+    'Ampicillin': 'Penicilinas', 'Ampicillin+Clavulanic_acid': 'Penicilinas',
+    'Piperacillin': 'Penicilinas', 'Piperacillin+Tazobactam': 'Penicilinas',
+    'Ticarcillin': 'Penicilinas', 'Ticarcillin+Clavulanic_acid': 'Penicilinas',
+    'Cefepime': 'Cefalosporinas', 'Cefixime': 'Cefalosporinas',
+    'Cefotaxime': 'Cefalosporinas', 'Cefoxitin': 'Cefalosporinas',
+    'Ceftazidime': 'Cefalosporinas', 'Ceftriaxone': 'Cefalosporinas',
+    'Cephalothin': 'Cefalosporinas',
+    'Ertapenem': 'Carbapenêmicos', 'Imipenem': 'Carbapenêmicos', 'Meropenem': 'Carbapenêmicos',
+    'Ciprofloxacin': 'Fluoroquinolonas',
+    'Amikacin': 'Aminoglicosídeos', 'Gentamicin': 'Aminoglicosídeos',
+    'Streptomycin': 'Aminoglicosídeos', 'Tobramycin': 'Aminoglicosídeos',
+    'Azithromycin': 'Macrolídeos', 'Erythromycin': 'Macrolídeos',
+    'Spiramycin': 'Macrolídeos', 'Telithromycin': 'Macrolídeos',
+    'Doxycycline': 'Tetraciclinas', 'Minocycline': 'Tetraciclinas', 'Tetracycline': 'Tetraciclinas',
+    'Aztreonam': 'Monobactâmicos',
+    'Chloramphenicol': 'Fenicóis', 'Florfenicol': 'Fenicóis',
+    'Sulfamethoxazole': 'Sulfonamidas', 'Trimethoprim': 'Trimetoprima',
+    'Lincomycin': 'Lincosamidas', 'Clindamycin': 'Lincosamidas',
+    'Pristinamycin_IA': 'Estreptograminas', 'Quinupristin': 'Estreptograminas', 'Virginiamycin_S': 'Estreptograminas',
+    'Fosfomycin': 'Fosfomicinas', 'Colistin': 'Polimixinas'
+}
+
+print("[2/4] Desdobrando determinantes e agrupando por genoma...")
+rows = []
+for _, row in df_filtered.iterrows():
+    res = row["resistance"]
+    if pd.isna(res):
+        continue
+    for ab in [r.strip() for r in str(res).split(";")]:
+        if ab in full_class_mapping:
+            rows.append({"genome_id": row["genome_id"], "class": full_class_mapping[ab]})
+
+df_expanded = pd.DataFrame(rows)
+total_genomes = df["genome_id"].nunique()
+
+genome_class_counts = df_expanded.groupby("genome_id")["class"].nunique().reset_index()
+distribution = genome_class_counts["class"].value_counts().sort_index().reset_index()
+distribution.columns = ["Num_Classes", "Qtd_Genomas"]
+distribution["Porcentagem"] = (distribution["Qtd_Genomas"] / total_genomes) * 100
+
+print("[3/4] Renderizando gráfico com seaborn...")
+fig, ax = plt.subplots(figsize=(11, 6))
+sns.barplot(data=distribution, x="Num_Classes", y="Porcentagem", palette="YlOrRd", ax=ax)
+
+for i, row in distribution.iterrows():
+    pct_label = f"{row['Porcentagem']:.1f}%\n(n={int(row['Qtd_Genomas'])})"
+    ax.text(i, row["Porcentagem"] + 0.5, pct_label, ha="center", va="bottom", fontsize=9, fontweight="bold")
+
+ax.set_title("Distribuição Percentual de Genomas por Quantidade de Classes Simultâneas", fontsize=12, pad=15, fontweight="bold")
+ax.set_xlabel("Quantidade de Classes de Antimicrobianos com Genes Detectados", fontsize=10)
+ax.set_ylabel("Porcentagem de Genomas (%)", fontsize=10)
+ax.set_ylim(0, max(distribution["Porcentagem"]) + 5)
+
+print("[4/4] Adicionando legenda lateral informativa e salvando...")
+classes_avaliadas = sorted(list(set(full_class_mapping.values())))
+classes_str = "\n".join([f"• {c}" for c in classes_avaliadas])
+legenda_texto = f"Classes Avaliadas ({len(classes_avaliadas)}):\n{classes_str}"
+
+ax.text(
+    1.03, 1.0, legenda_texto,
+    transform=ax.transAxes, fontsize=9, verticalalignment="top",
+    bbox=dict(boxstyle="round", facecolor="whitesmoke", alpha=0.9, edgecolor="gray")
+)
+
+plt.tight_layout()
+plt.savefig(arquivo_saida, dpi=300, bbox_inches="tight")
+plt.close()
+print(f"[✓] Imagem exportada com sucesso em: {arquivo_saida}")
+
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Perfil do Repertório Gênico do Pangenoma (Roary)
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(ggplot2)
+  library(patchwork)
+})
+
+arquivo_saida <- "Figura5_Pangenoma_Legenda_Externa.png"
+
+message("[1/3] Estruturando compartimentos gênicos do pangenoma...")
+df_pangenome <- tibble(
+  Compartimento = factor(
+    c("Core\n(≥99%)", "Soft core\n(95–99%)", "Shell\n(15–95%)", "Cloud\n(<15%)"),
+    levels = c("Core\n(≥99%)", "Soft core\n(95–99%)", "Shell\n(15–95%)", "Cloud\n(<15%)")
+  ),
+  Contagem = c(2308, 548, 1985, 19080),
+  Porcentagem = c(9.65, 2.29, 8.30, 79.76)
+)
+
+df_donut <- tibble(
+  Tipo = factor(
+    c("Core (≥99%): 2.308 genes (9,6%)", "Acessório (<99%): 21.613 genes (90,4%)"),
+    levels = c("Core (≥99%): 2.308 genes (9,6%)", "Acessório (<99%): 21.613 genes (90,4%)")
+  ),
+  Contagem = c(2308, 21613),
+  Pct_label = c("9.6%", "90.4%")
+)
+
+message("[2/3] Construindo os painéis A (barras) e B (rosca)...")
+plot_5A <- ggplot(df_pangenome, aes(x = Compartimento, y = Contagem, fill = Compartimento)) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.5, width = 0.65, alpha = 0.9) +
+  geom_text(
+    aes(label = paste0(format(Contagem, big.mark = "."), "\n(", sprintf("%.1f", Porcentagem), "%)")),
+    vjust = -0.3, size = 3.6, fontface = "bold"
+  ) +
+  scale_y_continuous(
+    limits = c(0, 22500),
+    breaks = seq(0, 20000, 5000),
+    labels = scales::label_comma(big.mark = ".")
+  ) +
+  scale_fill_manual(values = c(
+    "Core\n(≥99%)" = "#1f77b4",
+    "Soft core\n(95–99%)" = "#aec7e8",
+    "Shell\n(15–95%)" = "#ff7f0e",
+    "Cloud\n(<15%)" = "#ffbb78"
+  )) +
+  labs(
+    title = "A) Repertório Gênico do Pangenoma",
+    x = "Fração do Pangenoma",
+    y = "Número de Genes"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", size = 13),
+    axis.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank()
+  )
+
+plot_5B <- ggplot(df_donut, aes(x = 2, y = Contagem, fill = Tipo)) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.5, width = 0.85, alpha = 0.9) +
+  coord_polar(theta = "y", start = 140 * pi / 180) +
+  xlim(0.8, 2.5) +
+  scale_fill_manual(values = c(
+    "Core (≥99%): 2.308 genes (9,6%)" = "#1f77b4",
+    "Acessório (<99%): 21.613 genes (90,4%)" = "#ff7f0e"
+  )) +
+  geom_text(
+    aes(label = Pct_label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    fontface = "bold",
+    size = 4.2
+  ) +
+  labs(title = "B) Proporção Core vs. Acessório", fill = "Compartimento Gênico") +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13, hjust = 0.5, margin = margin(b = 10)),
+    legend.position = "right",
+    legend.title = element_text(face = "bold", size = 10.5),
+    legend.text = element_text(size = 9.5),
+    legend.box.background = element_rect(color = "gray80", linewidth = 0.5)
+  )
+
+message("[3/3] Combinando e exportando painel integrado...")
+figura_5 <- plot_5A + plot_5B + plot_layout(widths = c(1.15, 1.25))
+
+ggsave(arquivo_saida, plot = figura_5, width = 12, height = 4.8, dpi = 300)
+message(paste0("[✓] Painel pangenômico salvo em: ", arquivo_saida))
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ==============================================================================
+# Pipeline: Associação de Determinantes com Fontes Clínicas de Isolamento
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+import os
+import sys
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+arq_resistencia = "resistance_summary_all.tsv"
+arq_metadados   = "teste3.csv"
+saida_media     = "grafico_media.png"
+saida_heatmap   = "grafico_prevalencia.png"
+
+for arq in [arq_resistencia, arq_metadados]:
+    if not os.path.isfile(arq):
+        sys.exit(f"Erro: Arquivo '{arq}' não localizado.")
+
+print("[1/4] Carregando e limpando dados clínicos e determinantes...")
+resistance = pd.read_csv(arq_resistencia, sep="\t")
+resistance["gene_clean"] = resistance["gene"].str.split("_").str[0]
+res_filtered = resistance[resistance["gene_clean"] != "aac(2')-Ia"].copy()
+
+meta = pd.read_csv(arq_metadados, sep=";", skiprows=1)
+meta.columns = ["genome_id", "date", "location", "host", "isolation_source"]
+meta = meta[meta["isolation_source"] != "Not determined"]
+
+traducao_fontes = {
+    'Blood': 'Sangue',
+    'Urine': 'Urina',
+    'Gastrointestinal/Rectal': 'Gastrointestinal/Retal',
+    'Wound/Tissue': 'Ferida/Tecido',
+    'Respiratory': 'Trato respiratório'
+}
+meta["isolation_source"] = meta["isolation_source"].replace(traducao_fontes)
+
+ordem_especifica = [
+    'Trato respiratório', 'Ferida/Tecido', 'Gastrointestinal/Retal', 'Urina', 'Sangue'
+]
+
+print("[2/4] Cruzando dados e calculando proporções por fonte...")
+merged = pd.merge(res_filtered, meta, on="genome_id")
+merged = merged[merged["isolation_source"].isin(ordem_especifica)]
+merged["isolation_source"] = pd.Categorical(merged["isolation_source"], categories=ordem_especifica, ordered=True)
+
+sample_counts = merged.groupby("isolation_source", observed=True)["genome_id"].nunique()
+gene_counts_total = merged.groupby("isolation_source", observed=True).size()
+avg_stats = (gene_counts_total / sample_counts).reset_index(name="avg_genes")
+
+top_10_genes = res_filtered["gene_clean"].value_counts().head(10).index
+subset_top = merged[merged["gene_clean"].isin(top_10_genes)]
+
+prevalence_raw = (
+    subset_top.groupby(["isolation_source", "gene_clean"], observed=True)["genome_id"]
+    .nunique()
+    .unstack(fill_value=0)
+    .astype(float)
+)
+counts_aligned = sample_counts.reindex(prevalence_raw.index)
+prevalence = prevalence_raw.div(counts_aligned, axis=0) * 100
+
+print("[3/4] Exportando Gráfico 1: Média de genes por fonte...")
+plt.figure(figsize=(10, 6))
+sns.set_theme(style="whitegrid")
+ax1 = sns.barplot(data=avg_stats, x="avg_genes", y="isolation_source", palette="mako")
+for i in ax1.containers:
+    ax1.bar_label(i, fmt="%.2f", padding=4)
+plt.title("Média de Genes de Resistência Adquirida por Fonte de Isolamento", fontsize=13, fontweight="bold")
+plt.xlabel("Carga Média de Genes por Amostra", fontsize=11)
+plt.ylabel("Fonte de Isolamento", fontsize=11)
+plt.xlim(0, max(avg_stats["avg_genes"]) * 1.15)
+plt.tight_layout()
+plt.savefig(saida_media, dpi=300)
+plt.close()
+
+print("[4/4] Exportando Gráfico 2: Heatmap dos 10 principais determinantes...")
+plt.figure(figsize=(12, 8))
+sns.heatmap(
+    prevalence, annot=True, fmt=".1f", cmap="YlOrRd",
+    vmin=0, vmax=100, cbar_kws={"label": "Prevalência na Fonte (%)"}
+)
+plt.title("Prevalência dos 10 Principais Genes Adquiridos por Fonte (%)", fontsize=13, fontweight="bold")
+plt.xlabel("Determinante Genético de Resistência", fontsize=11)
+plt.ylabel("Fonte de Isolamento", fontsize=11)
+plt.xticks(fontstyle="italic")
+plt.tight_layout()
+plt.savefig(saida_heatmap, dpi=300)
+plt.close()
+
+print(f"[✓] Concluído! Imagens geradas: '{saida_media}' e '{saida_heatmap}'.")
+
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Correlação entre Elementos Genéticos Móveis (MGEs) e ARGs
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+  library(ggstatsplot)
+})
+
+arquivos_necessarios <- c(
+  "resistance_summary_all.tsv",
+  "icefinder_summary_all.tsv",
+  "isescan_summary_all.tsv",
+  "plasmidfinder_summary_all.tsv",
+  "phigaro_summary_all.tsv"
+)
+
+for (arq in arquivos_necessarios) {
+  if (!file.exists(arq)) {
+    stop(paste0("Erro: Arquivo requerido não encontrado: ", arq))
+  }
+}
+
+message("[1/3] Consolidando contagens genômicas de ARGs e MGEs...")
+res <- read.delim("resistance_summary_all.tsv", header = TRUE, sep = "\t", check.names = FALSE, row.names = NULL)
+ice <- read.delim("icefinder_summary_all.tsv",   header = TRUE, sep = "\t", check.names = FALSE)
+is  <- read.delim("isescan_summary_all.tsv",     header = TRUE, sep = "\t", check.names = FALSE)
+pla <- read.delim("plasmidfinder_summary_all.tsv", header = TRUE, sep = "\t", check.names = FALSE)
+phi <- read.delim("phigaro_summary_all.tsv",     header = TRUE, sep = "\t", check.names = FALSE)
+
+res_counts <- res %>% group_by(genome_id) %>% summarise(count_ARGs = n(), .groups = "drop")
+ice_counts <- ice %>% group_by(genome_id) %>% summarise(count_ICE = n(), .groups = "drop")
+is_counts  <- is  %>% group_by(genome_id) %>% summarise(count_IS = n(), .groups = "drop")
+pla_counts <- pla %>% group_by(genome_id) %>% summarise(count_Plasmid = n(), .groups = "drop")
+phi_counts <- phi %>% group_by(genome_id) %>% summarise(count_Prophage = n(), .groups = "drop")
+
+df_master <- res_counts %>%
+  left_join(ice_counts, by = "genome_id") %>%
+  left_join(is_counts,  by = "genome_id") %>%
+  left_join(pla_counts, by = "genome_id") %>%
+  left_join(phi_counts, by = "genome_id")
+
+df_master[is.na(df_master)] <- 0
+
+message("[2/3] Gerando painéis estatísticos não-paramétricos...")
+p1 <- ggscatterstats(
+  data = df_master, x = count_Plasmid, y = count_ARGs,
+  type = "nonparametric", xlab = "Número de Plasmídeos",
+  ylab = "Genes de Resistência (ARGs)", title = "A: Plasmídeos e ARGs",
+  marginal = TRUE, bf.message = FALSE
+)
+
+p2 <- ggscatterstats(
+  data = df_master, x = count_Prophage, y = count_ARGs,
+  type = "nonparametric", xlab = "Número de Profagos",
+  ylab = "Genes de Resistência (ARGs)", title = "B: Profagos e ARGs",
+  marginal = TRUE, bf.message = FALSE
+)
+
+p3 <- ggscatterstats(
+  data = df_master, x = count_IS, y = count_ARGs,
+  type = "nonparametric", xlab = "Sequências de Inserção (ISs)",
+  ylab = "Genes de Resistência (ARGs)", title = "C: ISs e ARGs",
+  marginal = TRUE, bf.message = FALSE
+)
+
+p4 <- ggscatterstats(
+  data = df_master, x = count_ICE, y = count_ARGs,
+  type = "nonparametric", xlab = "Elementos Integrativos e Conjugativos (ICEs)",
+  ylab = "Genes de Resistência (ARGs)", title = "D: ICEs e ARGs",
+  marginal = TRUE, bf.message = FALSE
+)
+
+message("[3/3] Exportando painel combinado 2x2...")
+figura_6 <- (p1 + p2) / (p3 + p4)
+arquivo_saida <- "Figura6_OneHealth_Providencia.png"
+
+ggsave(arquivo_saida, plot = figura_6, width = 15, height = 14, dpi = 300)
+message(paste0("[✓] Painel de correlação salvo em: ", arquivo_saida))
+
+#!/usr/bin/env Rscript
+
+# ==============================================================================
+# Pipeline: Perfil Epidemiológico Global (Tempo, Espaço, Hospedeiro e Origem)
+# Autor: Kaique Barral Domingues
+# ==============================================================================
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+  library(maps)
+})
+
+arquivo_entrada <- "metadadossocorro.csv"
+
+if (!file.exists(arquivo_entrada)) {
+  stop(paste0("Erro: Arquivo '", arquivo_entrada, "' não localizado."))
+}
+
+message("[1/5] Carregando metadados e preparando colunas de análise...")
+dados <- read.csv(arquivo_entrada, sep = ";", check.names = FALSE, stringsAsFactors = FALSE)
+
+# Painel A: Distribuição Temporal
+message("[2/5] Processando Painel A: Linha do tempo...")
+p1 <- dados %>%
+  mutate(Year_Num = as.numeric(`Assembly BioSample Collection date`)) %>%
+  filter(!is.na(Year_Num)) %>%
+  count(Year_Num) %>%
+  ggplot(aes(x = Year_Num, y = n)) +
+  geom_col(fill = "#4682B4", color = "white") +
+  scale_x_continuous(breaks = seq(min(Year_Num, na.rm = TRUE), max(Year_Num, na.rm = TRUE), by = 1)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, size = 8),
+    plot.title = element_text(size = 13, face = "bold")
+  ) +
+  labs(title = "A: Distribuição Temporal", x = "Ano de Coleta", y = "Número de Isolados")
+
+# Painel B: Mapa Mundial
+message("[3/5] Processando Painel B: Heatmap de coordenadas geográficas...")
+world_map <- map_data("world")
+geo_counts <- dados %>%
+  mutate(loc_clean = trimws(tolower(`Assembly BioSample Geographic location`))) %>%
+  filter(loc_clean != "not determined" & loc_clean != "") %>%
+  count(`Assembly BioSample Geographic location`) %>%
+  rename(region = `Assembly BioSample Geographic location`)
+
+# Adequações comuns de nomenclatura cartográfica
+geo_counts$region[geo_counts$region == "USA"] <- "USA"
+geo_counts$region[geo_counts$region == "United Kingdom"] <- "UK"
+
+map_full <- left_join(world_map, geo_counts, by = "region")
+
+p_map <- ggplot(map_full, aes(x = long, y = lat, group = group, fill = n)) +
+  geom_polygon(color = "white", linewidth = 0.1) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey95", name = "Isolados") +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(size = 13, face = "bold")
+  ) +
+  labs(title = "B: Distribuição Geográfica Global")
+
+# Painel D: Donut de Hospedeiros
+message("[4/5] Processando Painéis D e E: Donut de hospedeiros e fontes clínicas...")
+p4 <- dados %>%
+  mutate(host_clean = trimws(tolower(`Assembly BioSample Host`))) %>%
+  filter(host_clean != "not determined" & host_clean != "") %>%
+  count(`Assembly BioSample Host`) %>%
+  ggplot(aes(x = 2, y = n, fill = `Assembly BioSample Host`)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar("y") +
+  xlim(0.5, 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size = 13, face = "bold")) +
+  labs(title = "C: Hospedeiros (One Health)")
+
+# Painel E: Donut de Fontes Clínicas
+p5 <- dados %>%
+  mutate(src_clean = trimws(tolower(`Assembly BioSample Isolation source`))) %>%
+  filter(src_clean != "not determined" & src_clean != "") %>%
+  count(`Assembly BioSample Isolation source`) %>%
+  ggplot(aes(x = 2, y = n, fill = `Assembly BioSample Isolation source`)) +
+  geom_bar(stat = "identity", color = "white") +
+  coord_polar("y") +
+  xlim(0.5, 2.5) +
+  theme_void() +
+  theme(plot.title = element_text(size = 13, face = "bold")) +
+  labs(title = "D: Fontes Clínicas")
+
+# Combinação do Painel Geral
+message("[5/5] Exportando painéis consolidados e individuais...")
+figura_1 <- (p1 / p_map) / (p4 + p5) + plot_layout(heights = c(1, 1.5, 1))
+
+ggsave("Figura1_Epidemiologia_Consolidada.png", plot = figura_1, width = 13, height = 16, dpi = 300)
+ggsave("Figura1A_Isolation_Time.png", plot = p1, width = 10, height = 6, dpi = 300)
+ggsave("Figura1B_Global_Map.png", plot = p_map, width = 12, height = 8, dpi = 300)
+ggsave("Figura1C_Hosts_OneHealth.png", plot = p4, width = 8, height = 8, dpi = 300)
+ggsave("Figura1D_Clinical_Sources.png", plot = p5, width = 8, height = 8, dpi = 300)
+
+message("[✓] Todas as figuras epidemiológicas foram salvas com sucesso em alta resolução (300 DPI).")
